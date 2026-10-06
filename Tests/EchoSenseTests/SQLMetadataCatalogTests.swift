@@ -306,3 +306,56 @@ func findsObjectsByNameAlone() {
     #expect(catalog.objects(named: "ACTIVE_USERS").map(\.object.name) == ["active_users"])
     #expect(catalog.objects(named: "missing").isEmpty)
 }
+
+// MARK: - Built-in schema
+
+@Test
+func everyDatabaseGetsTheSameBuiltInSchema() {
+    let usersTable = EchoSenseSchemaObjectInfo(name: "users", schema: "public", type: .table, columns: [])
+    let schema = EchoSenseSchemaInfo(name: "public", objects: [usersTable])
+    let structure = EchoSenseDatabaseStructure(databases: [
+        EchoSenseDatabaseInfo(name: "one", schemas: [schema]),
+        EchoSenseDatabaseInfo(name: "two", schemas: [schema]),
+        EchoSenseDatabaseInfo(name: "three", schemas: [])
+    ])
+    let context = SQLEditorCompletionContext(databaseType: .postgresql, selectedDatabase: "one",
+                                              defaultSchema: "public", structure: structure)
+    let catalog = SQLMetadataCatalog(context: context, builtInFunctions: ["count", "sum"], includeSystemSchemas: false)
+
+    for name in ["one", "two", "three"] {
+        let schemas = catalog.metadataProvider.catalog(for: name)?.schemas ?? []
+        let builtIn = schemas.first { $0.name == "Built-in" }
+        #expect(builtIn?.objects.map(\.name) == ["count", "sum"], "\(name) has the built-in functions")
+    }
+}
+
+// MARK: - The engine builds the catalog when asked
+
+@Test
+func engineUsesTheLatestContextAfterSeveralUpdates() {
+    let engine = SQLAutoCompletionEngine()
+    let old = SQLEditorCompletionContext(databaseType: .postgresql, selectedDatabase: "testdb",
+                                          defaultSchema: "public", structure: makeStructure())
+    engine.updateContext(old)
+    engine.updateContext(nil)
+    engine.updateContext(old)
+
+    // Only the last context counts, and the catalog is made from it on first use.
+    #expect(engine.context == old)
+    let entry = engine.catalog?.object(database: "testdb", schema: "public", name: "orders")
+    #expect(entry?.object.name == "orders")
+    #expect(engine.isMetadataLimited == false)
+}
+
+@Test
+func engineWithoutStructureIsLimitedAndHasNoObjects() {
+    let engine = SQLAutoCompletionEngine()
+    engine.updateContext(SQLEditorCompletionContext(databaseType: .postgresql, selectedDatabase: nil,
+                                                     defaultSchema: nil, structure: nil))
+    #expect(engine.isMetadataLimited)
+    #expect(engine.catalog?.objectsByKey.isEmpty == true)
+
+    engine.updateContext(nil)
+    #expect(engine.catalog == nil)
+    #expect(engine.isMetadataLimited == false)
+}
