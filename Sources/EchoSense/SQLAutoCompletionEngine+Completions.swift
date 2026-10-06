@@ -136,8 +136,12 @@ extension SQLAutoCompletionEngine {
             catalogForParser = SQLDatabaseCatalog(schemas: [])
         }
 
-        let parser = SQLContextParser(text: text,
-                                       caretLocation: clampedCaret,
+        // A long script is parsed around the caret only: tokenising and segmenting all of it on each
+        // keystroke made typing in a script of a few hundred lines lag (the parser scopes to the
+        // statement at the caret anyway).
+        let parseRange = Self.parseWindow(in: nsText, caret: clampedCaret)
+        let parser = SQLContextParser(text: parseRange.length == nsText.length ? text : nsText.substring(with: parseRange),
+                                       caretLocation: clampedCaret - parseRange.location,
                                        dialect: context.databaseType.completionDialect,
                                        catalog: catalogForParser)
         let parsed = parser.parse()
@@ -293,6 +297,30 @@ extension SQLAutoCompletionEngine {
                                       clause: parsed.clause,
                                       isMetadataLimited: isMetadataLimited,
                                       caretLocation: clampedCaret)
+    }
+
+    /// Scripts longer than this are parsed around the caret (see `parseWindow`).
+    nonisolated(unsafe) static var parseWindowThreshold = 8_000
+
+    /// The part of the script the parser needs: from just after the last `;` before the caret (at
+    /// most 4000 characters back, else the start of that line) to the next `;` after it (at most
+    /// 6000 on, else the end of that line). All of a script up to `parseWindowThreshold`.
+    static func parseWindow(in text: NSString, caret: Int) -> NSRange {
+        let full = NSRange(location: 0, length: text.length)
+        guard text.length > parseWindowThreshold else { return full }
+        let lower = max(caret - 4_000, 0)
+        var start = text.lineRange(for: NSRange(location: lower, length: 0)).location
+        if caret > start {
+            let before = text.range(of: ";", options: [.literal, .backwards], range: NSRange(location: start, length: caret - start))
+            if before.location != NSNotFound { start = before.location + 1 }
+        }
+        let upper = min(caret + 6_000, text.length)
+        var end = NSMaxRange(text.lineRange(for: NSRange(location: upper, length: 0)))
+        if upper > caret {
+            let after = text.range(of: ";", options: .literal, range: NSRange(location: caret, length: upper - caret))
+            if after.location != NSNotFound { end = after.location + 1 }
+        }
+        return NSRange(location: start, length: max(min(end, text.length) - start, 0))
     }
 
     /// Checks if the caret is inside a string literal (single-quoted).
