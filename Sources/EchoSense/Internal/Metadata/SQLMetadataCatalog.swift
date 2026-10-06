@@ -67,6 +67,9 @@ struct SQLMetadataCatalog {
         var byName: [String: [ObjectEntry]] = [:]
         var catalogsByDatabase: [String: SQLDatabaseCatalog] = [:]
         var orderedDatabaseNames: [String] = []
+        // The same Built-in schema goes into every database: made once, not per database (with
+        // hundreds of databases it was most of the time spent rebuilding a catalog).
+        let builtInSchema = builtInFunctions.isEmpty ? nil : SQLMetadataCatalog.builtInSchema(functions: builtInFunctions)
 
         for database in structure.databases {
             let databaseLower = database.name.lowercased()
@@ -101,8 +104,8 @@ struct SQLMetadataCatalog {
                 schemasForDatabase.append(SQLSchema(name: schemaName, objects: sqlObjects))
             }
 
-            if !builtInFunctions.isEmpty {
-                schemasForDatabase.append(SQLMetadataCatalog.builtInSchema(functions: builtInFunctions))
+            if let builtInSchema {
+                schemasForDatabase.append(builtInSchema)
             }
 
             catalogsByDatabase[databaseLower] = SQLDatabaseCatalog(schemas: schemasForDatabase)
@@ -115,7 +118,7 @@ struct SQLMetadataCatalog {
         } else if let first = catalogsByDatabase.values.first {
             defaultCatalog = first
         } else {
-            let builtIns = SQLMetadataCatalog.builtInSchema(functions: builtInFunctions)
+            let builtIns = builtInSchema ?? SQLMetadataCatalog.builtInSchema(functions: builtInFunctions)
             defaultCatalog = builtIns.objects.isEmpty ? SQLDatabaseCatalog(schemas: []) : SQLDatabaseCatalog(schemas: [builtIns])
         }
 

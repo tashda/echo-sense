@@ -41,12 +41,24 @@ public final class SQLAutoCompletionEngine {
     }
 
     var context: SQLEditorCompletionContext?
-    var catalog: SQLMetadataCatalog?
+    /// The catalog of the context's objects. It is built when something first asks for it after the
+    /// context changed, not when the context is set: the host sets a new context for every schema
+    /// that loads, and each build walks every object of every database.
+    var catalog: SQLMetadataCatalog? {
+        get { rebuildCatalogIfStale(); return catalogStorage }
+        set { catalogStorage = newValue; catalogIsStale = false }
+    }
+    private var catalogStorage: SQLMetadataCatalog?
+    private var catalogIsStale = false
     private var builtInFunctions: [String] = []
     private var useTableAliasShortcuts = false
     let historyStore = SQLAutoCompletionHistoryStore.shared
     public private(set) var isMetadataLimited: Bool = false
-    private var metadataProvider: SQLStructureMetadataProvider = .empty
+    private var metadataProviderStorage: SQLStructureMetadataProvider = .empty
+    private var metadataProvider: SQLStructureMetadataProvider {
+        rebuildCatalogIfStale()
+        return metadataProviderStorage
+    }
     var lastAcceptedClause: SQLClause?
     var lastAcceptedCaretLocation: Int?
     // Default to enabled in production, disabled under test runners so the
@@ -122,18 +134,26 @@ public final class SQLAutoCompletionEngine {
         context = newContext
         if let newContext {
             builtInFunctions = SQLAutoCompletionEngine.builtInFunctions(for: newContext.databaseType)
-            let newCatalog = SQLMetadataCatalog(context: newContext,
-                                     builtInFunctions: builtInFunctions,
-                                     includeSystemSchemas: includeSystemSchemas)
-            catalog = newCatalog
-            metadataProvider = newCatalog.metadataProvider
             isMetadataLimited = newContext.structure == nil
+            catalogIsStale = true
         } else {
-            catalog = nil
+            catalogStorage = nil
+            catalogIsStale = false
             builtInFunctions = []
-            metadataProvider = .empty
+            metadataProviderStorage = .empty
             isMetadataLimited = false
         }
+    }
+
+    /// Builds the catalog for the current context if it changed since the last build.
+    private func rebuildCatalogIfStale() {
+        guard catalogIsStale, let context else { return }
+        let newCatalog = SQLMetadataCatalog(context: context,
+                                            builtInFunctions: builtInFunctions,
+                                            includeSystemSchemas: includeSystemSchemas)
+        catalogStorage = newCatalog
+        metadataProviderStorage = newCatalog.metadataProvider
+        catalogIsStale = false
     }
 
     public func updateAliasPreference(useTableAliases: Bool) {
